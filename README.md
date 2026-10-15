@@ -15,6 +15,10 @@ No Steam account/password is needed. [Image source](https://github.com/indiffere
 [release](https://github.com/indifferentbroccoli/enshrouded-server-docker/releases/tag/1.0.7),
 [downloader](https://github.com/SteamRE/DepotDownloader).
 
+**Deploying with Coolify? Follow [the Coolify setup below](#deploy-with-coolify),
+including the preparation step before pressing Deploy.** For a deployment
+managed directly from SSH, use [Install on the server](#install-on-the-server).
+
 ## Hardware and connection
 
 Use **Linux x86-64/amd64** with a **public IPv4**, Docker Engine, Compose v2
@@ -49,7 +53,193 @@ friends; aim for under roughly 80 ms round-trip latency and minimal packet loss.
 [Bandwidth requirement](https://enshrouded.zendesk.com/hc/en-us/articles/16055628734109-Recommended-Server-Specifications),
 [Hetzner network](https://docs.hetzner.com/cloud/technical-details/faq/).
 
+## Deploy with Coolify
+
+This route connects Coolify directly to this GitHub repository and `compose.yaml`.
+Keep the persistent installation at `/opt/enshrouded/server-data` on the **Hetzner
+deployment server**, outside Coolify's checkout. Coolify starts/stops the game;
+the host tools prepare it and provide backups and updates.
+
+### 1. Prepare the game before the first deployment
+
+Use SSH or a **host terminal on the Hetzner server selected in Coolify**. These
+commands do not run in the Coolify control-plane container or the game terminal.
+On a fresh Ubuntu/Debian host with Docker already installed by Coolify:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git python3
+sudo git clone https://github.com/A-REDA-EL/enshrouded-server.git /opt/enshrouded
+cd /opt/enshrouded
+sudo python3 server.py setup --name "Embervale with Friends" --players 8
+sudo python3 server.py check
+sudo docker compose pull enshrouded
+sudo docker compose run --rm --no-deps updater
+sudo cat credentials.txt
+```
+
+`setup` creates private configuration and random Admin/Friends passwords.
+`updater` downloads the game; wait for it to finish successfully. **These commands
+prepare the files without starting a second game server.** Keep the Friends
+password for step 6. No Steam account is required.
+
+If `/opt/enshrouded` already contains this repository, skip `git clone`, run
+`sudo git -C /opt/enshrouded pull --ff-only`, and preserve its data. If any server
+is already using these saves, stop it and back it up before downloading updates.
+For an earlier SSH-managed installation, use `sudo python3 server.py stop` and
+`sudo python3 server.py backup` before switching to Coolify. Do not run the
+download command against a running world.
+
+If you already pressed Deploy and saw a missing-mount/configuration error, stop
+the Coolify application, complete this preparation, then continue below.
+
+### 2. Connect the repository in Coolify
+
+In your project/environment, create a **Git repository application** using
+`https://github.com/A-REDA-EL/enshrouded-server`, then configure:
+
+| Setting | Value |
+| --- | --- |
+| Deployment server | Your Hetzner Linux x86-64 server with public IPv4 |
+| Branch | `main` |
+| Build strategy / Build pack | Docker Compose |
+| Base Directory | `/` |
+| Docker Compose Location | `/compose.yaml` |
+| Compose deployment | **Raw (deploy file as-is)** under Advanced → Docker compose |
+| Domains / generated HTTP routes | Leave empty; players use IPv4 and UDP |
+| Automatic / preview deployments | Disable; deploy deliberately during maintenance |
+
+Raw mode keeps Compose in charge of the stack; this game needs no HTTP proxy
+labels. Save/reload the Compose configuration. Leave the `maintenance` profile
+disabled so the `updater` is not run alongside the live game. Do not use
+`--profile maintenance` or `--profile '*'` in a custom start command.
+[Coolify Compose configuration](https://coolify.io/docs/applications/builds/docker-compose).
+
+### 3. Set the persistent paths, then deploy
+
+In the Coolify application's **Environment Variables**, set these Compose/runtime
+values (not build-only secrets):
+
+```dotenv
+ENSHROUDED_DATA_DIR=/opt/enshrouded/server-data
+ENSHROUDED_SCRIPTS_DIR=/opt/enshrouded/scripts
+GAME_MEMORY_LIMIT=12g
+```
+
+Keep the default pinned `ENSHROUDED_IMAGE`; if Coolify shows an empty override,
+remove the override or enter the complete image reference from `compose.yaml`.
+Passwords are in the protected JSON on the host, so adding `SERVER_PASSWORD` in
+Coolify will not change them.
+
+Press **Deploy**, inspect Deployment Logs, then open the `enshrouded` service's
+Runtime Logs. Wait for `HostOnline` / `Host_Online` and a **healthy** container.
+If startup fails, inspect `/opt/enshrouded/server-data/logs/engine.log` on the host.
+Do not proceed just because the deployment job finished.
+
+In the **game container terminal**, run:
+
+```bash
+python3 /opt/enshrouded/query.py 127.0.0.1 15637
+```
+
+Expect JSON containing your server name, `max_players: 8` and
+`password_protected: true`. If it fails, fix startup before testing the Internet
+connection. The first start can take a few minutes.
+
+### 4. Connect the host maintenance tools to Coolify's containers
+
+Do this once after the first successful deployment, **before enabling backups
+or running host update commands**. Coolify can choose a different Compose project
+name. Without matching it, the host tools could operate on a separate stack.
+
+In the **Hetzner host terminal**:
+
+```bash
+cd /opt/enshrouded
+sudo docker ps --filter label=com.docker.compose.service=enshrouded \
+  --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}'
+```
+
+Copy the running game container's ID from that table, then replace the value
+below. If several servers appear, select the one shown in this Coolify resource.
+
+```bash
+GAME_CONTAINER=REPLACE_WITH_GAME_CONTAINER_ID
+GAME_PROJECT=$(sudo docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$GAME_CONTAINER")
+test -n "$GAME_PROJECT" && test "$GAME_PROJECT" != '<no value>' && \
+  printf 'COMPOSE_PROJECT_NAME=%s\nENSHROUDED_DATA_DIR=/opt/enshrouded/server-data\nENSHROUDED_SCRIPTS_DIR=/opt/enshrouded/scripts\nGAME_MEMORY_LIMIT=12g\n' "$GAME_PROJECT" \
+  | sudo tee /opt/enshrouded/.env >/dev/null
+sudo chmod 600 /opt/enshrouded/.env
+sudo python3 server.py status
+```
+
+`status` must show **the same container ID/name as Coolify**, not an empty list
+or another game instance. Stop here and correct the project/path values if it
+does not. If you chose a different memory limit or image in Coolify, mirror those
+values in this host `.env`. It is ignored by Git.
+[Compose project-name precedence](https://docs.docker.com/compose/how-tos/project-name/).
+
+### 5. Open the firewall and test the public address
+
+In Hetzner, attach a firewall that allows inbound **UDP 15637** to this server.
+Keep SSH and any existing Coolify access rules. Leave outbound access available
+for Steam. See [the firewall details below](#firewall-required-before-friends-connect).
+
+Find the **deployment server's public IPv4** in Hetzner Console → your server →
+Networking. Use that address, even if the Coolify dashboard runs elsewhere.
+Do not share a container IP, private network IP or Coolify dashboard URL.
+
+From your laptop or another machine **outside the Hetzner server**, run this
+from a local copy of the repository, replacing `YOUR_PUBLIC_IPV4`:
+
+```bash
+python3 scripts/query.py YOUR_PUBLIC_IPV4 15637 --timeout 5
+```
+
+Expect the same server details as the local query. If the local query works and
+this times out, check the UDP firewall rule, chosen IPv4 and host forwarding.
+An HTTP/HTTPS domain or TCP port-checking website does not test this game port.
+
+### 6. Join once, then send this to your friends
+
+First test a real login yourself: update Enshrouded in Steam, open **Steam →
+View → Game Servers → Favorites → +**, add `YOUR_PUBLIC_IPV4:15637`, then find
+the favorite in Enshrouded's Join browser with dedicated servers enabled.
+Enter the Friends password from `/opt/enshrouded/credentials.txt`.
+
+After you successfully join, share this privately, with the placeholders filled:
+
+```text
+Enshrouded server: YOUR_PUBLIC_IPV4:15637
+Password: FRIENDS_PASSWORD_FROM_CREDENTIALS_FILE
+Steam → View → Game Servers → Favorites → + → add the address above.
+Then Enshrouded → Join → enable dedicated servers → select our favorite.
+Update your game in Steam before joining.
+```
+
+Keep the Admin password private. No port forwarding is needed on your friends'
+home routers; they connect to your Hetzner server.
+
+### 7. Enable backups and handle future updates
+
+After step 4 confirms the host tools control the correct container, run
+`sudo python3 server.py backup` from `/opt/enshrouded`. Verify that the same game
+container returns healthy and an archive appears in `/opt/enshrouded/backups`.
+Then enable the [daily systemd backup timer below](#backups-and-updates).
+It causes brief downtime at 05:00–05:05 UTC; it is **not enabled by Coolify Deploy**.
+Copy archives off the server as well.
+
+For a Steam game update, use `sudo python3 server.py update` in that host folder.
+For repository changes, update the host clone with
+`sudo git -C /opt/enshrouded pull --ff-only` before deploying the new commit in
+Coolify, because the mounted scripts come from that clone. Keep Coolify's image
+and memory settings synchronized with the host `.env`. Avoid running Coolify
+Deploy/Restart while a backup, update or restore is in progress. Ordinary Coolify
+restarts preserve the world and do not download game updates.
+
 ## Install on the server
+
+Use this alternative when managing Compose directly from SSH instead of Coolify.
 
 1. Install Docker Engine and the Compose plugin using Docker's instructions for
    your OS: [Ubuntu](https://docs.docker.com/engine/install/ubuntu/),
