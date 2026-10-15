@@ -15,6 +15,14 @@ No Steam account/password is needed. [Image source](https://github.com/indiffere
 [release](https://github.com/indifferentbroccoli/enshrouded-server-docker/releases/tag/1.0.7),
 [downloader](https://github.com/SteamRE/DepotDownloader).
 
+The image bundles an older Linux Steam client. Before starting Proton, the
+launcher checks for `SteamUtils011` and runs SteamCMD's `+quit` self-update when
+that interface is missing. This happens in the **game container**, where Proton
+uses the client; refreshing only the disposable updater would lose the change.
+It does not download game updates or change your configuration. A compatible
+client is reused on subsequent starts; a new container may need the refresh
+again. Allow outbound access to Steam for this step.
+
 **Deploying with Coolify? Follow [the Coolify setup below](#deploy-with-coolify),
 including the preparation step before pressing Deploy.** For a deployment
 managed directly from SSH, use [Install on the server](#install-on-the-server).
@@ -423,6 +431,30 @@ container attempt a graceful shutdown, but cannot guarantee a final flush.
 
 ## Troubleshooting and verification limits
 
+- **`No SteamUtils011` / `Failed to create Steamworks`:** the pinned image's
+  bundled `linux64/steamclient.so` lacks this interface even though its Proton
+  version is current. The launcher now restores the client refresh performed by
+  [upstream's installer](https://github.com/indifferentbroccoli/enshrouded-server-docker/blob/1.0.7/scripts/functions.sh).
+  For an SSH-managed deployment cloned from this repository, run the following
+  in `/opt/enshrouded` to back up the world, pull the fix and recreate the server:
+
+  ```bash
+  sudo python3 server.py stop
+  sudo python3 server.py backup
+  sudo git pull --ff-only origin main
+  sudo docker compose up -d --force-recreate --wait --wait-timeout 600 enshrouded
+  sudo python3 server.py status
+  ```
+
+  Recreating the container also discards the stale `/tmp/.X99-lock` left by
+  the restart loop. The bind-mounted saves and configuration remain in place.
+  Look for the Steam client refresh followed by game startup and a healthy
+  query result. If it fails, inspect `sudo docker compose logs --tail 150 enshrouded`
+  and both `server-data/logs/enshrouded_server.log` and `engine.log`.
+  Do not run the refresh only with `docker compose run --rm updater`: its
+  Steam client is not shared with the game container. With Coolify, stop and
+  redeploy through Coolify after updating the host script instead of creating
+  another stack from SSH.
 - **Healthy locally, unreachable outside:** verify the public IPv4, attached
   Hetzner firewall, UDP rule and host forwarding rules. `healthy` is a container
   loopback query, not proof of public reachability.
