@@ -67,25 +67,42 @@ commands do not run in the Coolify control-plane container or the game terminal.
 On a fresh Ubuntu/Debian host with Docker already installed by Coolify:
 
 ```bash
+(
+set -e
 sudo apt-get update
 sudo apt-get install -y git python3
-sudo git clone https://github.com/A-REDA-EL/enshrouded-server.git /opt/enshrouded
+if [ -e /opt/enshrouded/.git ]; then
+  sudo git -C /opt/enshrouded pull --ff-only
+else
+  ENSHROUDED_SETUP_DIR=$(mktemp -d)
+  sudo git clone https://github.com/A-REDA-EL/enshrouded-server.git "$ENSHROUDED_SETUP_DIR/repository"
+  sudo mkdir -p /opt/enshrouded
+  sudo cp -a "$ENSHROUDED_SETUP_DIR/repository/." /opt/enshrouded/
+fi
 cd /opt/enshrouded
 sudo python3 server.py setup --name "Embervale with Friends" --players 8
 sudo python3 server.py check
 sudo docker compose pull enshrouded
 sudo docker compose run --rm --no-deps updater
 sudo cat credentials.txt
+)
 ```
+
+The command group stops at the first error. It also handles an existing
+`/opt/enshrouded` that only contains directories created for mounts: the repository
+is cloned into a temporary directory and its source files copied into place.
+Existing `.env`, `credentials.txt`, `server-data/` and `backups/` are preserved
+because they are not in the repository. Do not delete the destination to fix a
+`destination path ... already exists` error.
 
 `setup` creates private configuration and random Admin/Friends passwords.
 `updater` downloads the game; wait for it to finish successfully. **These commands
 prepare the files without starting a second game server.** Keep the Friends
 password for step 6. No Steam account is required.
 
-If `/opt/enshrouded` already contains this repository, skip `git clone`, run
-`sudo git -C /opt/enshrouded pull --ff-only`, and preserve its data. If any server
-is already using these saves, stop it and back it up before downloading updates.
+If `/opt/enshrouded` already contains this Git repository, the command group
+updates it with `git pull --ff-only`. If any server is already using these saves,
+stop it and back it up before running the preparation commands.
 For an earlier SSH-managed installation, use `sudo python3 server.py stop` and
 `sudo python3 server.py backup` before switching to Coolify. Do not run the
 download command against a running world.
