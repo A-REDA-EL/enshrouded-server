@@ -1,0 +1,7 @@
+.env
+server-data/
+backups/
+credentials.txt
+.maintenance.lock
+__pycache__/
+*.pyc

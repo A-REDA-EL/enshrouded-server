@@ -1,0 +1,14 @@
+[Unit]
+Description=Verified Enshrouded world backup (brief server interruption)
+Requires=docker.service
+After=docker.service network-online.target
+ConditionPathExists=/opt/enshrouded/server-data/enshrouded_server.json
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/enshrouded
+ExecStart=/usr/bin/python3 /opt/enshrouded/server.py backup --keep 14
+UMask=0077
+Nice=10
+TimeoutStartSec=20min

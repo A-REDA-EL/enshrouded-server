@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily Enshrouded world backup at 05:00 UTC
+
+[Timer]
+OnCalendar=*-*-* 05:00:00 UTC
+RandomizedDelaySec=5min
+# Do not interrupt players immediately after boot to catch up a missed backup.
+Persistent=false
+Unit=enshrouded-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,70 @@
+name: enshrouded
+
+x-runtime: &runtime
+  image: ${ENSHROUDED_IMAGE:-indifferentbroccoli/enshrouded-server-docker:v1.0.7-proton@sha256:9295540327d6ad2e1771015a4d96e30312e911a249fa3d893b2229c492bd0053}
+  platform: linux/amd64
+  init: true
+  logging:
+    driver: local
+    options:
+      max-size: "20m"
+      max-file: "3"
+  volumes:
+    - type: bind
+      source: ./server-data
+      target: /home/steam/enshrouded
+      bind:
+        create_host_path: false
+
+services:
+  enshrouded:
+    <<: *runtime
+    entrypoint: ["python3", "/opt/enshrouded/launch.py"]
+    restart: unless-stopped
+    stop_grace_period: 2m
+    mem_limit: ${GAME_MEMORY_LIMIT:-12g}
+    memswap_limit: ${GAME_MEMORY_LIMIT:-12g}
+    pids_limit: 1024
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "0.0.0.0:15637:15637/udp"
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      UPDATE_ON_START: "false"
+      GENERATE_SETTINGS: "false"
+      WINEDEBUG: "-all"
+    volumes:
+      - type: bind
+        source: ./server-data
+        target: /home/steam/enshrouded
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./scripts
+        target: /opt/enshrouded
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD", "python3", "/opt/enshrouded/query.py", "127.0.0.1", "15637", "--timeout", "2"]
+      interval: 30s
+      timeout: 8s
+      retries: 5
+      start_period: 5m
+
+  # Explicit maintenance only. Ordinary restarts never change the game build.
+  updater:
+    <<: *runtime
+    profiles: ["maintenance"]
+    restart: "no"
+    mem_limit: 4g
+    healthcheck:
+      disable: true
+    entrypoint: ["/bin/bash", "-euc"]
+    command:
+      - |
+        /depotdownloader/DepotDownloader -app 2278520 -os windows -osarch 64 -branch public -dir /home/steam/enshrouded -validate
+        test -s /home/steam/enshrouded/enshrouded_server.exe
+        chown -R 1000:1000 /home/steam/enshrouded
